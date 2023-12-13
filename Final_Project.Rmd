@@ -1,0 +1,336 @@
+---
+title: "678_Final_Project"
+author: "Jinhu Sun"
+date: "2023-12-08"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+pacman::p_load("dplyr","corrplot","ggplot2","reshape2","tidyr","rpart","caret","rattle", "randomForest","lme4","lmtest")
+```
+
+```{r}
+setwd('~/Desktop/AMS/MA678/Final_Project')
+getwd()
+```
+
+
+```{r}
+Heart_Data <- read.csv('~/Desktop/AMS/MA678/Final_Project/heart_attack_prediction_dataset.csv')
+dim(Heart_Data)
+```
+
+```{r}
+any(is.na(Heart_Data[1:26]) == TRUE)
+any(duplicated(Heart_Data))
+```
+NO missing data and duplicate data in side the data file.
+
+```{r}
+summary(Heart_Data)
+```
+
+```{r}
+Heart_Data$Sex <- as.factor(Heart_Data$Sex)
+Heart_Data$Country <- as.factor(Heart_Data$Country)
+# Split the 'Blood.Pressure' column into 'Systolic' and 'Diastolic'
+Heart_Data$Systolic <- as.numeric(sapply(strsplit(as.character(Heart_Data$Blood.Pressure), "/"), `[`, 1))
+Heart_Data$Diastolic <- as.numeric(sapply(strsplit(as.character(Heart_Data$Blood.Pressure), "/"), `[`, 2))
+
+summary(Heart_Data)
+```
+
+```{r}
+Heart_Data$numericalSex <- ifelse(Heart_Data$Sex == "Male", 1, 0)
+numeric_data <- Heart_Data %>% select_if(is.numeric)
+correlation_matrix <- cor(numeric_data, use = "complete.obs")
+melted_cor_matrix <- melt(correlation_matrix)
+ggplot(data = melted_cor_matrix, aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  geom_text(aes(label = round(value, 2)), vjust = 1) +  # Adding text annotations
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", 
+                       midpoint = 0, limit = c(-1,1), space = "Lab", 
+                       name="Pearson\nCorrelation") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank())
+```
+
+```{r}
+# Function to calculate the percentage of heart attack risk for each category
+risk_percentage <- function(data, category) {
+  risk_counts <- data %>%
+    group_by(!!rlang::sym(category)) %>%
+    summarise(Risk = mean(`Heart.Attack.Risk` == 1) * 100) %>%
+    mutate(Category = category)
+  
+  names(risk_counts) <- c("Category_Value", "Risk", "Category")
+  return(risk_counts)
+}
+
+# Categories for comparison
+categories <- c('Sex', 'Diabetes', 'Family.History', 'Smoking', 'Obesity', 'Alcohol.Consumption', 'Previous.Heart.Problems', 'Medication.Use')
+
+# Calculating risk percentages for each category
+comparative_analysis_list <- lapply(categories, function(cat) risk_percentage(Heart_Data, cat))
+
+# Combine the results into a single dataframe
+comparative_analysis_df <- do.call(rbind, comparative_analysis_list)
+
+# Convert the Category column to character if it's a factor
+comparative_analysis_df$Category <- as.character(comparative_analysis_df$Category)
+
+# Rest of your code follows...
+
+
+# Reshape for plotting
+comparative_analysis_long <- pivot_longer(comparative_analysis_df, cols = c(Risk), names_to = "Variable", values_to = "Value")
+
+# Plotting
+ggplot(comparative_analysis_long, aes(x = Category, y = Value, fill = Category)) +
+  geom_bar(stat = "identity", position = position_dodge()) +
+  theme_minimal() +
+  labs(title = 'Heart Attack Risk Comparison Across Different Categories', 
+       y = 'Percentage of Heart Attack Risk', x = '') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+
+
+```{r}
+MLData <- Heart_Data[,c(-1,-5,-24,-25,-29)]
+MLData$Diet <- as.factor(MLData$Diet)
+MLData$Heart.Attack.Risk <- as.factor(MLData$Heart.Attack.Risk)
+columns_to_convert <- c("Diabetes", "Family.History", "Smoking","Obesity","Alcohol.Consumption","Previous.Heart.Problems","Medication.Use","Stress.Level")
+MLData[columns_to_convert] <- lapply(MLData[columns_to_convert], factor)
+summary(MLData)
+```
+
+```{r}
+ggplot(MLData, aes(x = Country, y = Cholesterol, fill = Country)) + 
+  geom_bar(stat = "summary", fun = mean) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Average Cholesterol Levels by Country", x = "Country", y = "Average Cholesterol")
+```
+
+```{r}
+ggplot(MLData, aes(x = Cholesterol, y = `Heart.Rate`, color = Country)) + 
+  geom_point() +
+  labs(title = "Cholesterol vs. Heart Rate by Country", x = "Cholesterol", y = "Heart Rate")
+```
+
+```{r}
+ggplot(MLData, aes(x = Age, y = Cholesterol)) + 
+  geom_point() + 
+  facet_wrap(~Country) +
+  labs(title = "Age vs. Cholesterol Levels across Countries", x = "Age", y = "Cholesterol")
+```
+
+
+```{r}
+set.seed(123)
+training.samples <- MLData$Heart.Attack.Risk %>% 
+  createDataPartition(p = 0.80, list = FALSE)
+train.data  <- MLData[training.samples, ]
+test.data <- MLData[-training.samples, ]
+```
+
+
+
+
+```{r}
+model1 <- rpart(Heart.Attack.Risk ~., data = train.data, control = rpart.control(cp = 0) , method = "class") # Fully grown trees!!!
+
+# Plot the trees
+par(xpd = NA) # Avoid clipping the text in some device
+plot(model1)
+text(model1, digits = 3)
+fancyRpartPlot(model1)
+```
+```{r}
+predictions <- predict(model1, test.data, type = "class")
+confusionMatrix(predictions, test.data$Heart.Attack.Risk)
+```
+
+```{r}
+predicted.classes <- model1 %>% 
+  predict(test.data, type = "class")
+head(predicted.classes)
+```
+
+```{r}
+mean(predicted.classes == test.data$Heart.Attack.Risk)
+```
+
+```{r}
+# making confusion matrix
+confusion_matrix <- table(predicted.classes, test.data$Heart.Attack.Risk)
+confusion_matrix
+```
+
+```{r}
+Sensitivity <- confusion_matrix[2,2]/(confusion_matrix[2,2]+confusion_matrix[1,2])
+Specificity <- confusion_matrix[1,1]/(confusion_matrix[1,1]+confusion_matrix[2,1])
+Sensitivity
+Specificity
+```
+
+
+```{r}
+# Pruning the tree
+# Fit the model on the training set
+set.seed(123)
+model2 <- train(
+  Heart.Attack.Risk ~., data = train.data, method = "rpart",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 25
+  )
+# Plot model accuracy vs different values of
+plot(model2)
+```
+
+```{r}
+model2$bestTune
+```
+
+
+
+```{r}
+model2$results
+```
+
+
+#########################################################################################################################################
+
+
+```{r}
+set.seed(123)
+training.samples <- MLData$Heart.Attack.Risk %>% 
+  createDataPartition(p = 0.75, list = FALSE)
+train.data  <- MLData[training.samples, ]
+test.data <- MLData[-training.samples, ]
+```
+
+```{r}
+set.seed(123)
+rf_model <- train(
+  Heart.Attack.Risk ~., data = train.data, method = "rf",
+  trControl = trainControl("cv", number = 10),
+  importance = TRUE
+  )
+print(rf_model)
+
+```
+
+
+
+```{r}
+rf_model$bestTune
+```
+
+```{r}
+rf_model$finalModel
+```
+
+
+```{r}
+predicted.classes <- rf_model %>% predict(test.data)
+head(predicted.classes)
+```
+
+```{r}
+mean(predicted.classes == test.data$Heart.Attack.Risk)
+```
+
+
+```{r}
+logmodel <- glm(Heart.Attack.Risk ~ Smoking + Obesity + Alcohol.Consumption + Exercise.Hours.Per.Week + Diet + Country, data = MLData, family = binomial)
+summary(logmodel)
+```
+
+```{r}
+residuals <- residuals(logmodel)
+plot(residuals)
+qqnorm(residuals)
+qqline(residuals)
+```
+
+```{r}
+library(pROC)  # For ROC curve
+
+# Predict probabilities
+predicted_probabilities <- predict(logmodel, type = "response")
+
+# Convert probabilities to binary outcomes based on a 0.5 threshold
+predicted_classes <- ifelse(predicted_probabilities > 0.5, 1, 0)
+
+# Create a confusion matrix
+table(predicted = predicted_classes, actual = MLData$Heart.Attack.Risk)
+
+# Calculate performance metrics
+confusionMatrix(as.factor(predicted_classes), MLData$Heart.Attack.Risk)
+
+# ROC curve
+roc_response <- roc(MLData$Heart.Attack.Risk, predicted_probabilities)
+plot(roc_response)
+auc(roc_response)
+
+```
+
+
+
+```{r}
+########################################################################################################################################
+model <- glmer(Heart.Attack.Risk ~ Smoking + Obesity + Alcohol.Consumption + Exercise.Hours.Per.Week + Diet + (1 | Country), data = MLData, family = binomial)
+summary(model)
+```
+
+```{r}
+VarCorr(model)
+```
+
+```{r}
+# Checking residuals
+residuals <- residuals(model)
+plot(residuals)
+```
+
+```{r}
+# Check for overdispersion
+overdisp_fun <- function(model) {
+  res <- residuals(model, type = "pearson")
+  df <- df.residual(model)
+  sum(res^2) / df
+}
+overdisp_fun(model)
+```
+
+```{r}
+qqnorm(residuals)
+qqline(residuals)
+```
+```{r}
+# Predict probabilities
+predicted_probabilities <- predict(model, type = "response")
+
+# Convert probabilities to binary outcomes based on a 0.5 threshold
+predicted_classes <- ifelse(predicted_probabilities > 0.5, 1, 0)
+
+# Create a confusion matrix
+table(predicted = predicted_classes, actual = MLData$Heart.Attack.Risk)
+
+# Calculate performance metrics
+confusionMatrix(as.factor(predicted_classes), MLData$Heart.Attack.Risk)
+
+# ROC curve
+roc_response <- roc(MLData$Heart.Attack.Risk, predicted_probabilities)
+plot(roc_response)
+auc(roc_response)
+```
+
